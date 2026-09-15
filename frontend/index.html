@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>2D Projectile Physics Lab & Solver Engine</title>
+  <meta name="description" content="High-precision 2D Projectile Motion Simulation comparing Ideal, Euler, and RK4 numerical integrations with aerodynamic drag and wind resistance." />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            rk4: '#06b6d4',
+            euler: '#eab308',
+            ideal: '#94a3b8',
+            darkbg: '#080c14',
+            panelbg: '#0f172a'
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- Custom Styles -->
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="bg-[#080c14] text-slate-100 min-h-screen flex flex-col selection:bg-cyan-500/30 selection:text-cyan-200">
+
+  <!-- ================= TOP DASHBOARD HEADER ================= -->
+  <header class="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-md px-6 py-3.5 sticky top-0 z-40 flex flex-wrap items-center justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <div class="h-10 w-10 rounded-xl bg-gradient-to-tr from-cyan-600 via-indigo-600 to-amber-500 p-0.5 shadow-lg shadow-cyan-500/20">
+        <div class="h-full w-full bg-[#080c14] rounded-[10px] flex items-center justify-center text-cyan-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+        </div>
+      </div>
+      <div>
+        <h1 class="text-lg md:text-xl font-bold tracking-tight text-white flex items-center gap-2">
+          2D Projectile Physics Lab & Solver Engine
+          <span class="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 font-mono font-normal">v1.0 RK4</span>
+        </h1>
+        <p class="text-xs text-slate-400">High-Fidelity Aerodynamic Drag, Wind Velocity & Energy Dissipation Simulation</p>
+      </div>
+    </div>
+
+    <!-- Right Header Badges & Backend Status -->
+    <div class="flex items-center gap-3">
+      <div id="backendStatusBadge" class="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800/80 border border-slate-700/60 text-xs text-slate-300 font-mono">
+        <span id="backendStatusDot" class="w-2 h-2 rounded-full bg-emerald-400 pulse-active"></span>
+        <span id="backendStatusText">FastAPI Engine Ready</span>
+      </div>
+      <a href="http://localhost:8000/docs" target="_blank" rel="noopener noreferrer" class="hidden sm:inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-slate-800/50 hover:bg-slate-700/60 text-slate-300 hover:text-white border border-slate-700/40 transition">
+        <span>Swagger Docs</span>
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+      </a>
+    </div>
+  </header>
+
+  <!-- ================= MAIN WORKSPACE ================= -->
+  <div class="flex-1 flex flex-col lg:flex-row gap-5 p-4 lg:p-6 max-w-[1920px] w-full mx-auto overflow-hidden">
+
+    <!-- ================= LEFT SIDEBAR (CONTROLS) ================= -->
+    <aside class="w-full lg:w-[380px] xl:w-[420px] flex-shrink-0 flex flex-col gap-5">
+      <div class="glass-panel rounded-2xl p-5 flex flex-col gap-5 border border-slate-800/80">
+        
+        <!-- Sidebar Title -->
+        <div class="flex items-center justify-between border-b border-slate-800/70 pb-3">
+          <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+            </svg>
+            <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-200">Simulation Controls</h2>
+          </div>
+          <span class="text-xs text-slate-400 font-mono">SI Units</span>
+        </div>
+
+        <!-- Parameters Form -->
+        <div class="space-y-4">
+
+          <!-- 1. Initial Velocity (v0) -->
+          <div class="space-y-1.5">
+            <div class="flex justify-between items-center text-xs">
+              <label for="v0_num" class="font-medium text-slate-300 flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+                Initial Velocity (<span class="font-mono text-cyan-300">v₀</span>)
+              </label>
+              <div class="flex items-center gap-1">
+                <input type="number" id="v0_num" min="1" max="250" step="1" value="50" class="w-16 bg-slate-900 border border-slate-700/80 rounded px-2 py-0.5 text-right font-mono text-xs text-cyan-300 focus:border-cyan-500 focus:outline-none" />
+                <span class="text-slate-500 font-mono">m/s</span>
+              </div>
+            </div>
+            <input type="range" id="v0_range" min="1" max="200" step="1" value="50" class="cursor-pointer" />
+            <div class="flex justify-between text-[10px] font-mono text-slate-500">
+              <span>1 m/s</span>
+              <span>100 m/s</span>
+              <span>200 m/s</span>
+            </div>
+          </div>
+
+          <!-- 2. Launch Angle (theta) -->
+          <div class="space-y-1.5">
+            <div class="flex justify-between items-center text-xs">
+              <label for="angle_num" class="font-medium text-slate-300 flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+                Launch Angle (<span class="font-mono text-amber-300">θ</span>)
+              </label>
+              <div class="flex items-center gap-1">
+                <input type="number" id="angle_num" min="0" max="90" step="1" value="45" class="w-16 bg-slate-900 border border-slate-700/80 rounded px-2 py-0.5 text-right font-mono text-xs text-amber-300 focus:border-amber-500 focus:outline-none" />
+                <span class="text-slate-500 font-mono">deg</span>
+              </div>
+            </div>
+            <input type="range" id="angle_range" min="0" max="90" step="1" value="45" class="cursor-pointer" />
+            <div class="flex justify-between text-[10px] font-mono text-slate-500">
+              <span>0° (Flat)</span>
+              <span>45° (Max Range)</span>
+              <span>90° (Vertical)</span>
+            </div>
+          </div>
+
+          <!-- 3. Object Mass (m) -->
+          <div class="space-y-1.5">
+            <div class="flex justify-between items-center text-xs">
+              <label for="mass_num" class="font-medium text-slate-300 flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-indigo-400"></span>
+                Object Mass (<span class="font-mono text-indigo-300">m</span>)
+              </label>
+              <div class="flex items-center gap-1">
+                <input type="number" id="mass_num" min="0.05" max="50" step="0.1" value="1.0" class="w-16 bg-slate-900 border border-slate-700/80 rounded px-2 py-0.5 text-right font-mono text-xs text-indigo-300 focus:border-indigo-500 focus:outline-none" />
+                <span class="text-slate-500 font-mono">kg</span>
+              </div>
+            </div>
+            <input type="range" id="mass_range" min="0.1" max="20" step="0.1" value="1.0" class="cursor-pointer" />
+            <div class="flex justify-between text-[10px] font-mono text-slate-500">
+              <span>0.1 kg</span>
+              <span>10 kg</span>
+              <span>20 kg</span>
+            </div>
+          </div>
+
+          <!-- 4. Drag Coefficient (k) -->
+          <div class="space-y-1.5">
+            <div class="flex justify-between items-center text-xs">
+              <label for="k_num" class="font-medium text-slate-300 flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                Drag Coeff (<span class="font-mono text-emerald-300">k</span>)
+              </label>
+              <div class="flex items-center gap-1">
+                <input type="number" id="k_num" min="0" max="0.2" step="0.001" value="0.010" class="w-16 bg-slate-900 border border-slate-700/80 rounded px-2 py-0.5 text-right font-mono text-xs text-emerald-300 focus:border-emerald-500 focus:outline-none" />
+                <span class="text-slate-500 font-mono">kg/m</span>
+              </div>
+            </div>
+            <input type="range" id="k_range" min="0" max="0.1" step="0.001" value="0.010" class="cursor-pointer" />
+            <div class="flex justify-between text-[10px] font-mono text-slate-500">
+              <span>0.00 (Vacuum)</span>
+              <span>0.01 (Streamlined)</span>
+              <span>0.10 (Bluff)</span>
+            </div>
+          </div>
+
+          <!-- 5. Wind Speed (wind_x) -->
+          <div class="space-y-1.5">
+            <div class="flex justify-between items-center text-xs">
+              <label for="wind_num" class="font-medium text-slate-300 flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-rose-400"></span>
+                Wind Speed (<span class="font-mono text-rose-300">wind_x</span>)
+              </label>
+              <div class="flex items-center gap-1">
+                <input type="number" id="wind_num" min="-30" max="30" step="1" value="0" class="w-16 bg-slate-900 border border-slate-700/80 rounded px-2 py-0.5 text-right font-mono text-xs text-rose-300 focus:border-rose-500 focus:outline-none" />
+                <span class="text-slate-500 font-mono">m/s</span>
+              </div>
+            </div>
+            <input type="range" id="wind_range" min="-30" max="30" step="1" value="0" class="cursor-pointer" />
+            <div class="flex justify-between text-[10px] font-mono text-slate-500">
+              <span>-30 (Headwind)</span>
+              <span>0 (Calm)</span>
+              <span>+30 (Tailwind)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ================= METHOD SELECTORS ================= -->
+        <div class="pt-2 border-t border-slate-800/70">
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2.5">
+            Integration Method Selector
+          </label>
+          <div class="space-y-2">
+            
+            <!-- Ideal Checkbox -->
+            <label class="flex items-center justify-between p-2.5 rounded-xl bg-slate-900/60 border border-slate-800/80 hover:border-slate-700 transition cursor-pointer select-none">
+              <div class="flex items-center gap-3">
+                <input type="checkbox" id="toggleIdeal" checked class="custom-checkbox checkbox-ideal" />
+                <div class="flex flex-col">
+                  <span class="text-xs font-medium text-slate-200">Ideal (Analytical)</span>
+                  <span class="text-[10px] text-slate-400">No air resistance, parabolic exact</span>
+                </div>
+              </div>
+              <span class="text-[10px] px-2 py-0.5 rounded font-mono badge-ideal">Slate Dashed</span>
+            </label>
+
+            <!-- Euler Checkbox -->
+            <label class="flex items-center justify-between p-2.5 rounded-xl bg-slate-900/60 border border-slate-800/80 hover:border-yellow-500/40 transition cursor-pointer select-none">
+              <div class="flex items-center gap-3">
+                <input type="checkbox" id="toggleEuler" checked class="custom-checkbox checkbox-euler" />
+                <div class="flex flex-col">
+                  <span class="text-xs font-medium text-amber-300">Euler Integration</span>
+                  <span class="text-[10px] text-slate-400">1st order numerical step</span>
+                </div>
+              </div>
+              <span class="text-[10px] px-2 py-0.5 rounded font-mono badge-euler">Yellow Solid</span>
+            </label>
+
+            <!-- RK4 Checkbox -->
+            <label class="flex items-center justify-between p-2.5 rounded-xl bg-slate-900/60 border border-slate-800/80 hover:border-cyan-500/40 transition cursor-pointer select-none">
+              <div class="flex items-center gap-3">
+                <input type="checkbox" id="toggleRK4" checked class="custom-checkbox checkbox-rk4" />
+                <div class="flex flex-col">
+                  <span class="text-xs font-medium text-cyan-300">Runge-Kutta 4th (RK4)</span>
+                  <span class="text-[10px] text-slate-400">High-order numerical benchmark</span>
+                </div>
+              </div>
+              <span class="text-[10px] px-2 py-0.5 rounded font-mono badge-rk4">Cyan Glow</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- ================= ACTION BUTTONS ================= -->
+        <div class="pt-2 border-t border-slate-800/70 flex flex-col gap-2.5">
+          
+          <!-- Launch Simulation Button -->
+          <button id="btnLaunch" class="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white font-semibold text-sm tracking-wide flex items-center justify-center gap-2 glow-btn">
+            <svg class="w-4 h-4 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>Launch Simulation</span>
+          </button>
+
+          <div class="grid grid-cols-2 gap-2">
+            <!-- Reset Canvas Button -->
+            <button id="btnReset" class="py-2.5 px-3 rounded-xl bg-slate-800/70 hover:bg-slate-700/80 border border-slate-700/60 text-slate-300 hover:text-white text-xs font-medium transition flex items-center justify-center gap-1.5">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              <span>Reset Canvas</span>
+            </button>
+
+            <!-- Export CSV Button -->
+            <button id="btnExport" class="py-2.5 px-3 rounded-xl bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-700/40 text-emerald-300 hover:text-emerald-100 text-xs font-medium transition flex items-center justify-center gap-1.5">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              <span>Export CSV</span>
+            </button>
+          </div>
+
+          <!-- Animation Playback Toggle -->
+          <div class="flex items-center justify-between px-2 pt-1 text-xs text-slate-400">
+            <span class="flex items-center gap-1.5">
+              <span id="animStateDot" class="w-2 h-2 rounded-full bg-cyan-400"></span>
+              Playback Animation
+            </span>
+            <div class="flex items-center gap-1.5">
+              <button id="btnReplay" class="text-[11px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono transition">Replay</button>
+              <select id="playbackSpeed" class="bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-slate-300 focus:outline-none">
+                <option value="1">1x</option>
+                <option value="2">2x</option>
+                <option value="4" selected>4x</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+
+    <!-- ================= MAIN CONTENT (RIGHT PANEL) ================= -->
+    <main class="flex-1 flex flex-col gap-5 min-w-0">
+
+      <!-- ================= TOP ROW: METRIC CARDS ================= -->
+      <section class="grid grid-cols-2 md:grid-cols-4 gap-3 lg:gap-4">
+        
+        <!-- Metric 1: Max Height -->
+        <div class="glass-panel rounded-2xl p-4 flex flex-col justify-between relative overflow-hidden group">
+          <div class="absolute -right-3 -top-3 w-16 h-16 bg-cyan-500/10 rounded-full blur-xl group-hover:bg-cyan-500/20 transition"></div>
+          <div class="flex items-center justify-between text-xs text-slate-400">
+            <span class="font-medium">Max Height (H_max)</span>
+            <span class="font-mono text-cyan-400">y_peak</span>
+          </div>
+          <div class="my-2">
+            <div class="text-2xl lg:text-3xl font-bold font-mono tracking-tight text-white flex items-baseline gap-1">
+              <span id="metricMaxHeight">--</span>
+              <span class="text-xs text-slate-400 font-normal">m</span>
+            </div>
+          </div>
+          <div class="text-[11px] font-mono flex items-center justify-between text-slate-400 border-t border-slate-800/80 pt-1.5">
+            <span>Ideal: <strong id="subHeightIdeal" class="text-slate-300 font-normal">--</strong></span>
+            <span>Euler: <strong id="subHeightEuler" class="text-amber-400 font-normal">--</strong></span>
+          </div>
+        </div>
+
+        <!-- Metric 2: Max Range -->
+        <div class="glass-panel rounded-2xl p-4 flex flex-col justify-between relative overflow-hidden group">
+          <div class="absolute -right-3 -top-3 w-16 h-16 bg-emerald-500/10 rounded-full blur-xl group-hover:bg-emerald-500/20 transition"></div>
+          <div class="flex items-center justify-between text-xs text-slate-400">
+            <span class="font-medium">Max Range (R_max)</span>
+            <span class="font-mono text-emerald-400">x_impact</span>
+          </div>
+          <div class="my-2">
+            <div class="text-2xl lg:text-3xl font-bold font-mono tracking-tight text-white flex items-baseline gap-1">
+              <span id="metricMaxRange">--</span>
+              <span class="text-xs text-slate-400 font-normal">m</span>
+            </div>
+          </div>
+          <div class="text-[11px] font-mono flex items-center justify-between text-slate-400 border-t border-slate-800/80 pt-1.5">
+            <span>Ideal: <strong id="subRangeIdeal" class="text-slate-300 font-normal">--</strong></span>
+            <span>Euler: <strong id="subRangeEuler" class="text-amber-400 font-normal">--</strong></span>
+          </div>
+        </div>
+
+        <!-- Metric 3: Flight Time -->
+        <div class="glass-panel rounded-2xl p-4 flex flex-col justify-between relative overflow-hidden group">
+          <div class="absolute -right-3 -top-3 w-16 h-16 bg-indigo-500/10 rounded-full blur-xl group-hover:bg-indigo-500/20 transition"></div>
+          <div class="flex items-center justify-between text-xs text-slate-400">
+            <span class="font-medium">Flight Time (T)</span>
+            <span class="font-mono text-indigo-400">t_total</span>
+          </div>
+          <div class="my-2">
+            <div class="text-2xl lg:text-3xl font-bold font-mono tracking-tight text-white flex items-baseline gap-1">
+              <span id="metricFlightTime">--</span>
+              <span class="text-xs text-slate-400 font-normal">s</span>
+            </div>
+          </div>
+          <div class="text-[11px] font-mono flex items-center justify-between text-slate-400 border-t border-slate-800/80 pt-1.5">
+            <span>Ideal: <strong id="subTimeIdeal" class="text-slate-300 font-normal">--</strong></span>
+            <span>Euler: <strong id="subTimeEuler" class="text-amber-400 font-normal">--</strong></span>
+          </div>
+        </div>
+
+        <!-- Metric 4: Energy Loss % -->
+        <div class="glass-panel rounded-2xl p-4 flex flex-col justify-between relative overflow-hidden group">
+          <div class="absolute -right-3 -top-3 w-16 h-16 bg-rose-500/10 rounded-full blur-xl group-hover:bg-rose-500/20 transition"></div>
+          <div class="flex items-center justify-between text-xs text-slate-400">
+            <span class="font-medium">Energy Loss %</span>
+            <span class="font-mono text-rose-400">ΔEm / Em0</span>
+          </div>
+          <div class="my-2">
+            <div class="text-2xl lg:text-3xl font-bold font-mono tracking-tight text-rose-400 flex items-baseline gap-1">
+              <span id="metricEnergyLoss">--</span>
+              <span class="text-xs text-slate-400 font-normal">%</span>
+            </div>
+          </div>
+          <div class="text-[11px] font-mono flex items-center justify-between text-slate-400 border-t border-slate-800/80 pt-1.5">
+            <span>Initial Em: <strong id="subEmInitial" class="text-slate-300 font-normal">--</strong></span>
+            <span>Impact: <strong id="subImpactV" class="text-cyan-400 font-normal">--</strong></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= MIDDLE: HTML5 CANVAS TRAJECTORY VISUALIZATION ================= -->
+      <section class="glass-panel rounded-2xl p-4 flex flex-col flex-1 min-h-[420px] lg:min-h-[480px] relative">
+        <!-- Canvas Top Bar -->
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-3 pb-2 border-b border-slate-800/80">
+          <div class="flex items-center gap-2.5">
+            <span class="w-2.5 h-2.5 rounded-full bg-cyan-400"></span>
+            <h3 class="text-sm font-semibold text-slate-200">Trajectory Field Dynamics (X-Y Plane)</h3>
+            <span id="windIndicatorTag" class="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700/60 font-mono">
+              Wind: 0 m/s
+            </span>
+          </div>
+          
+          <!-- Legend Badges -->
+          <div class="flex items-center gap-3 text-xs font-mono">
+            <div class="flex items-center gap-1.5">
+              <span class="w-4 h-0.5 border-b-2 border-dashed border-slate-400"></span>
+              <span class="text-slate-400">Ideal</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span class="w-3.5 h-1 rounded bg-yellow-400"></span>
+              <span class="text-yellow-400">Euler</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span class="w-3.5 h-1 rounded bg-cyan-400 shadow-[0_0_8px_#06b6d4]"></span>
+              <span class="text-cyan-400 font-semibold">RK4</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Canvas Container -->
+        <div class="relative flex-1 w-full h-full min-h-[350px] bg-[#060a12] rounded-xl overflow-hidden border border-slate-800/70">
+          <canvas id="trajectoryCanvas"></canvas>
+          
+          <!-- Hover coordinate tooltip overlay -->
+          <div id="canvasTooltip" class="absolute hidden pointer-events-none bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-lg px-2.5 py-1 text-[11px] font-mono text-cyan-300 shadow-xl z-20">
+            x: 0.0m, y: 0.0m
+          </div>
+
+          <!-- Scale & Axis Info Badge (Bottom-Right) -->
+          <div id="scaleInfo" class="absolute bottom-2 right-3 pointer-events-none text-[10px] font-mono text-slate-500 bg-slate-900/70 px-2 py-0.5 rounded border border-slate-800">
+            Grid Scale: Auto
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= BOTTOM ROW: ENERGY VS TIME CHART ================= -->
+      <section class="glass-panel rounded-2xl p-4 flex flex-col h-[280px]">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-2 pb-2 border-b border-slate-800/80">
+          <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
+            </svg>
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-200">Mechanical Energy Dissipation vs Time</h3>
+          </div>
+
+          <!-- Chart Mode Switcher -->
+          <div class="flex items-center gap-2 text-xs font-mono">
+            <span class="text-slate-400 text-[11px]">View Mode:</span>
+            <select id="chartViewMode" class="bg-slate-900 border border-slate-700 rounded px-2 py-0.5 text-xs text-slate-300 focus:outline-none focus:border-indigo-500">
+              <option value="rk4_breakdown">RK4 (Ek, Ep, Em)</option>
+              <option value="compare_em">Compare Em (Ideal vs Euler vs RK4)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="relative flex-1 w-full h-full">
+          <canvas id="energyChart"></canvas>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Scripts -->
+  <script src="app.js"></script>
+</body>
+</html>
