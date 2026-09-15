@@ -4,14 +4,15 @@
  * 1. API Communication with FastAPI backend (http://localhost:8000/api/simulate)
  * 2. Dynamic HTML5 Canvas rendering (renderCanvas) with multi-model trail lines,
  *    axis scaling, grid, and frame-by-frame projectile animation.
- * 3. Real-time Chart.js Energy breakdown (renderEnergyChart) synchronized with
- *    the projectile's instantaneous position.
- * 4. Export CSV functionality for trajectory points.
+ * 3. Real-time Chart.js Energy breakdown (renderEnergyChart) with lifecycle management
+ *    to prevent memory leaks.
+ * 4. Single-instance animation loop control (animationFrameId) to eliminate speed-up bugs.
+ * 5. Export CSV functionality for trajectory telemetry points.
  */
 
 (() => {
   // ==========================================
-  // 1. DOM REFERENCES & INITIAL STATE
+  // 1. DOM REFERENCES & GLOBAL STATE
   // ==========================================
   const inputs = {
     v0_num: document.getElementById('v0_num'),
@@ -65,11 +66,12 @@
   const backendStatusDot = document.getElementById('backendStatusDot');
   const backendStatusText = document.getElementById('backendStatusText');
 
-  // Simulation State
-  let simulationData = null;
-  let energyChart = null;
+  // Single-instance animation and Chart.js state (fixes speed-up and memory leak bugs)
   let animationFrameId = null;
-  let animProgress = 1.0; // 0.0 to 1.0
+  let energyChartInstance = null;
+
+  let simulationData = null;
+  let animProgress = 1.0;
   let isAnimating = false;
   let animStartTime = null;
   let debounceTimer = null;
@@ -124,7 +126,6 @@
     }
   }
 
-  // Trigger simulation on input change (debounced 180ms for responsive UI)
   function onInputChange() {
     updateWindBadge();
     clearTimeout(debounceTimer);
@@ -143,6 +144,7 @@
       mass: parseFloat(inputs.mass_num.value) || 1.0,
       k: parseFloat(inputs.k_num.value) || 0.01,
       wind_x: parseFloat(inputs.wind_num.value) || 0.0,
+      wind_y: 0.0,
       g: 9.81,
       dt: 0.01,
     };
@@ -168,6 +170,7 @@
       backendStatusText.textContent = 'FastAPI Engine Connected';
 
       updateMetrics();
+      initEnergyChart();
       startAnimation();
     } catch (error) {
       console.warn('Backend API request failed, activating client fallback:', error);
@@ -176,11 +179,12 @@
       backendStatusText.textContent = 'Client Physics Solver Active';
 
       updateMetrics();
+      initEnergyChart();
       startAnimation();
     }
   }
 
-  // Client-side fallback solver in case backend is offline
+  // Client-side fallback solver
   function clientSideFallback(p) {
     const angleRad = (p.angle_deg * Math.PI) / 180.0;
     const vx0 = p.v0 * Math.cos(angleRad);
@@ -214,36 +218,43 @@
     }
     idealPts.push(pt(tFlight, vx0 * tFlight, 0, vx0, vy0 - p.g * tFlight));
 
-    // 2. Euler
+    // 2. Euler with exact ground landing linear interpolation
     const eulerPts = [pt(0, 0, 0, vx0, vy0)];
     let [et, ex, ey, evx, evy] = [0, 0, 0, vx0, vy0];
     for (let i = 0; i < 40000; i++) {
       const vrx = evx - p.wind_x;
-      const vr = Math.hypot(vrx, evy);
+      const vry = evy - (p.wind_y || 0);
+      const vr = Math.hypot(vrx, vry);
       const ax = -(p.k / p.mass) * vr * vrx;
-      const ay = -p.g - (p.k / p.mass) * vr * evy;
+      const ay = -p.g - (p.k / p.mass) * vr * vry;
       const nx = ex + evx * dt;
       const ny = ey + evy * dt;
       const nvx = evx + ax * dt;
       const nvy = evy + ay * dt;
       const nt = et + dt;
+
       if (ny < 0) {
-        const f = -ey / (ny - ey);
-        eulerPts.push(pt(et + f * dt, ex + f * (nx - ex), 0, evx + f * (nvx - evx), evy + f * (nvy - evy)));
+        const fraction = (0 - ey) / (ny - ey);
+        const x_final = ex + fraction * (nx - ex);
+        const t_final = et + fraction * dt;
+        const vx_final = evx + fraction * (nvx - evx);
+        const vy_final = evy + fraction * (nvy - evy);
+        eulerPts.push(pt(t_final, x_final, 0, vx_final, vy_final));
         break;
       }
       eulerPts.push(pt(nt, nx, ny, nvx, nvy));
       [et, ex, ey, evx, evy] = [nt, nx, ny, nvx, nvy];
     }
 
-    // 3. RK4
+    // 3. RK4 with exact ground landing linear interpolation
     const rk4Pts = [pt(0, 0, 0, vx0, vy0)];
     let state = [0, 0, vx0, vy0];
     let rt = 0;
     const deriv = (s) => {
       const vrx = s[2] - p.wind_x;
-      const vr = Math.hypot(vrx, s[3]);
-      return [s[2], s[3], -(p.k / p.mass) * vr * vrx, -p.g - (p.k / p.mass) * vr * s[3]];
+      const vry = s[3] - (p.wind_y || 0);
+      const vr = Math.hypot(vrx, vry);
+      return [s[2], s[3], -(p.k / p.mass) * vr * vrx, -p.g - (p.k / p.mass) * vr * vry];
     };
 
     for (let i = 0; i < 40000; i++) {
@@ -256,9 +267,14 @@
       const k4 = deriv(s4);
       const nxt = state.map((v, idx) => v + (dt / 6.0) * (k1[idx] + 2 * k2[idx] + 2 * k3[idx] + k4[idx]));
       const nt = rt + dt;
+
       if (nxt[1] < 0) {
-        const f = -state[1] / (nxt[1] - state[1]);
-        rk4Pts.push(pt(rt + f * dt, state[0] + f * (nxt[0] - state[0]), 0, state[2] + f * (nxt[2] - state[2]), state[3] + f * (nxt[3] - state[3])));
+        const fraction = (0 - state[1]) / (nxt[1] - state[1]);
+        const x_final = state[0] + fraction * (nxt[0] - state[0]);
+        const t_final = rt + fraction * dt;
+        const vx_final = state[2] + fraction * (nxt[2] - state[2]);
+        const vy_final = state[3] + fraction * (nxt[3] - state[3]);
+        rk4Pts.push(pt(t_final, x_final, 0, vx_final, vy_final));
         break;
       }
       rk4Pts.push(pt(nt, nxt[0], nxt[1], nxt[2], nxt[3]));
@@ -352,7 +368,6 @@
       });
     });
 
-    // 15% visual padding headroom
     maxX = Math.ceil((maxX * 1.15) / 10) * 10;
     minX = Math.min(0, Math.floor((minX * 1.15) / 10) * 10);
     maxY = Math.ceil((maxY * 1.25) / 5) * 5;
@@ -388,16 +403,15 @@
     const w = canvas.width / (window.devicePixelRatio || 1);
     const h = canvas.height / (window.devicePixelRatio || 1);
 
+    // Cleanly clear and reset HTML5 Canvas context before redrawing
     ctx.clearRect(0, 0, w, h);
 
-    // Dark gradient background
     const bgGrad = ctx.createLinearGradient(0, 0, 0, h);
     bgGrad.addColorStop(0, '#060a12');
     bgGrad.addColorStop(1, '#0c1424');
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, w, h);
 
-    // Compute pleasant round intervals
     const calcInterval = (range) => {
       const raw = range / 8;
       const mag = Math.pow(10, Math.floor(Math.log10(raw)));
@@ -411,7 +425,6 @@
     const xStep = Math.max(1, calcInterval(transform.xMax - transform.xMin));
     const yStep = Math.max(1, calcInterval(transform.yMax - transform.yMin));
 
-    // Vertical grid lines & X-axis labels
     const startX = Math.floor(transform.xMin / xStep) * xStep;
     for (let x = startX; x <= transform.xMax; x += xStep) {
       const [cx] = toCanvasCoords(x, 0);
@@ -430,7 +443,6 @@
       ctx.fillText(`${Math.round(x)}m`, cx, transform.padTop + transform.plotHeight + 16);
     }
 
-    // Horizontal grid lines & Y-axis labels
     for (let y = 0; y <= transform.yMax; y += yStep) {
       const [, cy] = toCanvasCoords(0, y);
       if (cy > transform.padTop + transform.plotHeight + 2 || cy < transform.padTop - 2) continue;
@@ -448,7 +460,6 @@
       ctx.fillText(`${Math.round(y)}m`, transform.padLeft - 8, cy + 3.5);
     }
 
-    // Ground Baseline (y = 0)
     const [gx1, gy] = toCanvasCoords(transform.xMin, 0);
     const [gx2] = toCanvasCoords(transform.xMax, 0);
     ctx.strokeStyle = '#38bdf8';
@@ -458,7 +469,6 @@
     ctx.lineTo(gx2, gy);
     ctx.stroke();
 
-    // Ground Hatching
     ctx.strokeStyle = 'rgba(56, 189, 248, 0.2)';
     ctx.lineWidth = 1;
     for (let gx = gx1; gx < gx2; gx += 14) {
@@ -468,7 +478,6 @@
       ctx.stroke();
     }
 
-    // Origin Launch Point (0,0)
     const [ox, oy] = toCanvasCoords(0, 0);
     ctx.save();
     ctx.fillStyle = '#38bdf8';
@@ -505,7 +514,6 @@
     ctx.stroke();
     ctx.restore();
 
-    // Peak & Impact Annotations when completed
     if (progress >= 0.99 && active.length > 2) {
       let peak = active[0];
       active.forEach((p) => {
@@ -546,13 +554,11 @@
     const [hx, hy] = toCanvasCoords(head.x, head.y);
 
     ctx.save();
-    // Glowing outer halo
     ctx.fillStyle = 'rgba(6, 182, 212, 0.25)';
     ctx.beginPath();
     ctx.arc(hx, hy, 9, 0, Math.PI * 2);
     ctx.fill();
 
-    // Projectile ball core
     ctx.fillStyle = '#22d3ee';
     ctx.shadowColor = '#06b6d4';
     ctx.shadowBlur = 14;
@@ -562,9 +568,6 @@
     ctx.restore();
   }
 
-  /**
-   * Main Canvas Render Function
-   */
   function renderCanvas(progress = 1.0) {
     if (!simulationData) return;
     updateDynamicScale();
@@ -572,7 +575,6 @@
 
     const { ideal, euler, rk4 } = simulationData.trajectories;
 
-    // 1. Draw Ideal Trail (Slate dashed)
     if (toggles.ideal.checked) {
       drawTrail(ideal.points, {
         color: '#94a3b8',
@@ -582,7 +584,6 @@
       }, progress);
     }
 
-    // 2. Draw Euler Trail (Yellow solid)
     if (toggles.euler.checked) {
       drawTrail(euler.points, {
         color: '#eab308',
@@ -592,7 +593,6 @@
       }, progress);
     }
 
-    // 3. Draw RK4 Trail (Cyan glow solid)
     if (toggles.rk4.checked) {
       drawTrail(rk4.points, {
         color: '#06b6d4',
@@ -601,19 +601,25 @@
         glow: 12,
       }, progress);
 
-      // Animate the projectile ball frame-by-frame along RK4
       drawProjectileBall(rk4.points, progress);
     }
   }
 
   // ==========================================
-  // 6. CHART.JS ENERGY BREAKDOWN (renderEnergyChart)
+  // 6. CHART.JS ENERGY BREAKDOWN & LIFECYCLE MANAGEMENT
   // ==========================================
   function initEnergyChart() {
+    // Memory Leak Fix: Destroy existing Chart.js instance before creating a new one
+    if (energyChartInstance !== null) {
+      energyChartInstance.destroy();
+      energyChartInstance = null;
+    }
+
     const chartCanvas = document.getElementById('energyChart');
+    if (!chartCanvas) return;
     const chartCtx = chartCanvas.getContext('2d');
 
-    energyChart = new Chart(chartCtx, {
+    energyChartInstance = new Chart(chartCtx, {
       type: 'line',
       data: {
         labels: [],
@@ -651,7 +657,7 @@
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        animation: false, // Turned off for smooth 60fps synchronous frame updates
+        animation: false,
         interaction: { mode: 'index', intersect: false },
         plugins: {
           legend: {
@@ -690,27 +696,21 @@
     });
   }
 
-  /**
-   * Updates Chart.js line chart synchronized with the projectile position
-   */
   function renderEnergyChart(currentProgress = 1.0) {
-    if (!simulationData || !energyChart) return;
+    if (!simulationData || !energyChartInstance) return;
     const { ideal, euler, rk4 } = simulationData.trajectories;
     const mode = chartViewMode.value;
 
-    // Downsample for high-performance rendering across thousands of integration steps
     const sampleRate = Math.max(1, Math.floor(rk4.points.length / 80));
     const sample = (arr) => arr.filter((_, idx) => idx % sampleRate === 0 || idx === arr.length - 1);
 
     const sampledRK4 = sample(rk4.points);
     const fullTimeLabels = sampledRK4.map((p) => p.time.toFixed(2));
-
-    // Current index based on projectile's animated progress
     const activeCount = Math.max(1, Math.floor(sampledRK4.length * currentProgress));
 
     if (mode === 'rk4_breakdown') {
-      energyChart.data.labels = fullTimeLabels;
-      energyChart.data.datasets = [
+      energyChartInstance.data.labels = fullTimeLabels;
+      energyChartInstance.data.datasets = [
         {
           label: 'Total Em (RK4)',
           data: sampledRK4.map((p, idx) => (idx < activeCount ? p.Em : null)),
@@ -737,7 +737,6 @@
         },
       ];
     } else {
-      // Comparison of Em across Ideal, Euler, and RK4
       const sampledIdeal = sample(ideal.points);
       const sampledEuler = sample(euler.points);
       const maxLen = Math.max(sampledIdeal.length, sampledEuler.length, sampledRK4.length);
@@ -747,8 +746,8 @@
         return p ? p.time.toFixed(2) : '';
       });
 
-      energyChart.data.labels = labels;
-      energyChart.data.datasets = [
+      energyChartInstance.data.labels = labels;
+      energyChartInstance.data.datasets = [
         {
           label: 'Ideal Em (Conserved)',
           data: sampledIdeal.map((p, idx) => (idx < activeCount ? p.Em : null)),
@@ -774,15 +773,18 @@
       ];
     }
 
-    // Update with 0 animation duration for instant 60fps sync
-    energyChart.update('none');
+    energyChartInstance.update('none');
   }
 
   // ==========================================
-  // 7. ANIMATION CONTROLLER (requestAnimationFrame)
+  // 7. ANIMATION FRAME MANAGEMENT (Speed-up Bug Fix)
   // ==========================================
   function startAnimation() {
-    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    // Animation Frame Fix: Cancel existing running loop before starting a new one
+    if (animationFrameId !== null) {
+      cancelAnimationFrame(animationFrameId);
+      animationFrameId = null;
+    }
 
     animProgress = 0.0;
     isAnimating = true;
@@ -796,7 +798,6 @@
       const elapsed = now - animStartTime;
       animProgress = Math.min(1.0, elapsed / duration);
 
-      // Render both canvas & chart in strict lockstep
       renderCanvas(animProgress);
       renderEnergyChart(animProgress);
 
@@ -804,6 +805,7 @@
         animationFrameId = requestAnimationFrame(step);
       } else {
         isAnimating = false;
+        animationFrameId = null;
         animStateDot.className = 'w-2 h-2 rounded-full bg-cyan-400';
       }
     }
@@ -930,7 +932,6 @@
   });
 
   // Initial Boot
-  initEnergyChart();
   updateWindBadge();
   resizeCanvas();
   fetchSimulationData();
