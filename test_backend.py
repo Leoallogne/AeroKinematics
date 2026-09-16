@@ -74,10 +74,13 @@ def test_physics_simulation():
 def test_api_endpoints():
     client = TestClient(app)
 
-    # 1. Root & Health
+    # 1. Root (static mount) & /api/info health check
     res_root = client.get("/")
-    assert res_root.status_code == 200
-    assert res_root.json()["status"] == "online"
+    assert res_root.status_code == 200  # StaticFiles serves index.html
+
+    res_info = client.get("/api/info")
+    assert res_info.status_code == 200
+    assert res_info.json()["status"] == "online"
 
     # 2. Standard Simulation Endpoint
     payload = {

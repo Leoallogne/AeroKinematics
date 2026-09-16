@@ -6,11 +6,21 @@ Provides REST API endpoints for:
 3. CSV data export with formatted kinematic and energy telemetry download.
 """
 
+import os
+import sys
+from pathlib import Path
+
+# Add project root directory to sys.path so 'python backend/main.py' and 'python -m backend.main' both work seamlessly
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from typing import Dict, Any, Optional
 import asyncio
 import uvicorn
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from backend.physics import (
@@ -104,8 +114,9 @@ class CSVExportRequest(SimulationRequest):
     method: str = Field("rk4", description="Trajectory model to export ('rk4', 'euler', or 'ideal')")
 
 
-@app.get("/")
-async def read_root():
+@app.get("/api/info")
+async def api_info():
+    """Service information and status endpoint."""
     return {
         "status": "online",
         "service": "2D Projectile Motion Simulation API",
@@ -212,5 +223,11 @@ async def export_csv(params: CSVExportRequest) -> Response:
         raise HTTPException(status_code=500, detail=f"CSV export error: {str(exc)}")
 
 
+# Mount frontend directory so running 'python backend/main.py' serves both Web Dashboard and API on http://localhost:8000
+frontend_path = PROJECT_ROOT / "frontend"
+if frontend_path.exists():
+    app.mount("/", StaticFiles(directory=str(frontend_path), html=True), name="frontend")
+
+
 if __name__ == "__main__":
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True, app_dir=str(PROJECT_ROOT))

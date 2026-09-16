@@ -66,6 +66,11 @@
   const backendStatusDot = document.getElementById('backendStatusDot');
   const backendStatusText = document.getElementById('backendStatusText');
 
+  // Dynamic API base URL resolution (handles localhost, 127.0.0.1, or custom ports)
+  const API_BASE = (window.location.protocol === 'file:' || !window.location.hostname)
+    ? 'http://127.0.0.1:8000'
+    : `${window.location.protocol}//${window.location.hostname}:8000`;
+
   // Single-instance animation and Chart.js state (fixes speed-up and memory leak bugs)
   let animationFrameId = null;
   let energyChartInstance = null;
@@ -142,7 +147,7 @@
       v0: parseFloat(inputs.v0_num.value) || 50.0,
       angle_deg: parseFloat(inputs.angle_num.value) || 45.0,
       mass: parseFloat(inputs.mass_num.value) || 1.0,
-      k: parseFloat(inputs.k_num.value) || 0.01,
+      k: isNaN(parseFloat(inputs.k_num.value)) ? 0.01 : parseFloat(inputs.k_num.value),
       wind_x: parseFloat(inputs.wind_num.value) || 0.0,
       wind_y: 0.0,
       g: 9.81,
@@ -150,7 +155,7 @@
     };
 
     try {
-      const response = await fetch('http://localhost:8000/api/simulate', {
+      const response = await fetch(`${API_BASE}/api/simulate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

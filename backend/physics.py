@@ -55,14 +55,16 @@ def _calculate_derivatives(
     return ax, ay
 
 
-def _create_point_dict(t: float, x: float, y: float, vx: float, vy: float, mass: float, g: float) -> Dict[str, float]:
+def _create_point_dict(t: float, x: float, y: float, vx: float, vy: float, mass: float, g: float, g_eff: float = None) -> Dict[str, float]:
     """
     Helper to create point record with position, velocity, and energies.
+    If g_eff is provided (variable atmosphere mode), potential energy is computed
+    using the altitude-adjusted effective gravity instead of the sea-level constant.
     """
     clamped_y = max(0.0, y)
     v_sq = vx**2 + vy**2
     ek = 0.5 * mass * v_sq
-    ep = mass * g * clamped_y
+    ep = mass * (g_eff if g_eff is not None else g) * clamped_y
     em = ek + ep
 
     return {
@@ -130,7 +132,7 @@ def _simulate_ideal(v0: float, angle_rad: float, mass: float, g: float, dt: floa
 
     points: List[Dict[str, float]] = []
 
-    if vy0 < 0 or g <= 0:
+    if vy0 <= 0 or g <= 0:
         points.append(_create_point_dict(0.0, 0.0, 0.0, vx0, vy0, mass, g))
         return {"summary": _compute_summary(points), "points": points}
 
@@ -186,6 +188,12 @@ def _simulate_euler(
     for _ in range(max_steps):
         ax, ay = _calculate_derivatives(y, vx, vy, mass, k, wind_x, wind_y, g, use_variable_atmosphere)
 
+        # Compute g_eff at current altitude for physically accurate Ep calculation
+        if use_variable_atmosphere:
+            g_eff = g * ((R_EARTH / (R_EARTH + max(0.0, y))) ** 2)
+        else:
+            g_eff = g
+
         x_next = x + vx * dt
         y_next = y + vy * dt
         vx_next = vx + ax * dt
@@ -201,7 +209,7 @@ def _simulate_euler(
             points.append(landing_point)
             break
 
-        points.append(_create_point_dict(t_next, x_next, y_next, vx_next, vy_next, mass, g))
+        points.append(_create_point_dict(t_next, x_next, y_next, vx_next, vy_next, mass, g, g_eff=g_eff))
         t, x, y, vx, vy = t_next, x_next, y_next, vx_next, vy_next
 
     return {
@@ -261,6 +269,12 @@ def _simulate_rk4(
         t_next = t + dt
         x_next, y_next, vx_next, vy_next = next_state
 
+        # Compute g_eff at current altitude for physically accurate Ep calculation
+        if use_variable_atmosphere:
+            g_eff = g * ((R_EARTH / (R_EARTH + max(0.0, state[1]))) ** 2)
+        else:
+            g_eff = g
+
         if y_next < 0.0:
             landing_point = _interpolate_landing(
                 t, state[0], state[1], state[2], state[3],
@@ -270,7 +284,7 @@ def _simulate_rk4(
             points.append(landing_point)
             break
 
-        points.append(_create_point_dict(t_next, x_next, y_next, vx_next, vy_next, mass, g))
+        points.append(_create_point_dict(t_next, x_next, y_next, vx_next, vy_next, mass, g, g_eff=g_eff))
         t = t_next
         state = next_state
 
